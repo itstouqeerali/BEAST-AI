@@ -268,33 +268,23 @@ export default function App() {
       }
     };
 
-    for (let i = 0; i < 5; i++) {
-      try {
+    try {
         const response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(`API Error: ${errorData.error?.message || response.statusText}`);
-        }
+        if (!response.ok) throw new Error("API Limit reached or invalid Key.");
 
         const result = await response.json();
-        const prediction = result.predictions?.[0];
-        if (!prediction) throw new Error("Empty prediction array");
-        
-        const base64Data = prediction.bytesBase64Encoded || prediction.imageBytes || prediction.bytes;
+        const base64Data = result.predictions?.[0]?.bytesBase64Encoded || result.predictions?.[0]?.imageBytes;
         if (!base64Data) throw new Error("No image data found");
         
         return `data:image/png;base64,${base64Data}`;
-
-      } catch (error) {
-        if (i === 4) throw error;
-        const delay = Math.pow(2, i) * 1000;
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
+    } catch (error) {
+        console.error("Image Gen Error:", error);
+        return null;
     }
   };
 
@@ -304,9 +294,11 @@ export default function App() {
   const generateFrameSequence = async (basePrompt, frameCount = 4) => {
     const frames = [];
     for (let i = 0; i < frameCount; i++) {
-      const framePrompt = `${basePrompt}, variation ${i + 1}, ultra high resolution, 8k`;
+      const framePrompt = `${basePrompt}, visual consistency, frame ${i+1} of ${frameCount}, hyper-realistic`;
       const image = await generateSingleImage(framePrompt);
-      frames.push(image);
+      if(image) frames.push(image);
+      // Brief delay to prevent hitting rate limits too fast
+      await new Promise(r => setTimeout(r, 250));
     }
     return frames;
   };
@@ -314,6 +306,12 @@ export default function App() {
   const handleSend = async (textOverride = '') => {
     const text = (textOverride || input).trim();
     if (!text || isProcessing) return;
+
+    if (!apiKey) {
+        setMessages(prev => [...prev, { role: 'user', content: text, type: 'text' }, { role: 'assistant', content: "SYSTEM ERROR: No API Key found. Please add your key to the configuration.", type: 'text' }]);
+        setInput('');
+        return;
+    }
 
     setShowSettings(false);
     const userMsg = { role: 'user', content: text, type: 'text' };
@@ -346,9 +344,8 @@ export default function App() {
       return;
     }
 
-    // Comprehensive keywords to trigger generation
-    const imageKeywords = ["generate", "create", "draw", "make a picture", "show me a picture", "image", "photo", "painting", "render", "pic", "visualize"];
-    const videoKeywords = ["video", "movie", "animate", "animation", "generate video", "make a video", "create a video"];
+    const imageKeywords = ["generate", "create", "draw", "image", "photo", "render", "pic"];
+    const videoKeywords = ["video", "movie", "animate", "animation"];
     
     const isImageRequest = imageKeywords.some(k => text.toLowerCase().includes(k));
     const isVideoRequest = videoKeywords.some(k => text.toLowerCase().includes(k));
@@ -356,7 +353,7 @@ export default function App() {
     try {
       if (isVideoRequest) {
         setProcessingType('video');
-        // Logic for "video" (animation frames)
+        // Logic for "video"
         await generateFrameSequence(text, 4); 
         const finalMessages = [...updatedMessages, { role: 'assistant', content: "Neural Video Stream Protocol Alpha", type: 'video' }];
         setMessages(finalMessages);
@@ -384,20 +381,19 @@ export default function App() {
               systemInstruction: { parts: [{ text: activePrompt }] },
               contents: updatedMessages.map(m => ({
                 role: m.role === 'assistant' ? 'model' : 'user',
-                parts: [{ text: m.role === 'assistant' && (m.type === 'image_group' || m.type === 'video') ? "Visual asset." : String(m.content) }]
+                parts: [{ text: String(m.content) }]
               }))
             })
           }
         );
         const data = await response.json();
-        const aiText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response received from neural link.";
+        const aiText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response received.";
         const finalMessages = [...updatedMessages, { role: 'assistant', content: aiText, type: 'text' }];
         setMessages(finalMessages);
         saveToHistory(text, finalMessages);
       }
     } catch (err) {
-      console.error("Critical System Failure:", err);
-      setMessages(prev => [...prev, { role: 'assistant', content: `**SYSTEM ERROR:** ${err.message || 'Neural link failure.'}`, type: 'text' }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `**SYSTEM ERROR:** ${err.message}`, type: 'text' }]);
     } finally {
       setIsProcessing(false);
       setProcessingType('text');
@@ -604,4 +600,5 @@ export default function App() {
     </div>
   );
 }
+
 
